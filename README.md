@@ -1,5 +1,7 @@
 # mindcode-claw-image2
 
+[中文版](./README.zh-CN.md) | English
+
 A publishable draft of a **thin skill + local service** package for running Codex image generation through a stable local API.
 
 ## What this package is
@@ -160,3 +162,15 @@ Internal technical identifiers intentionally remain:
 - `codex-imagegen-worker`
 - `codex-imagegenctl`
 - `CODEX_IMAGEGEN_*`
+
+## ⭐ Like it? Star it!
+
+If you find this project interesting, give it a star, it helps others discover it too.
+
+## Follow Me
+
+I write about AI, startups, and psychology.
+
+- WeChat public account: MindCode
+- X: [@moneygalaxy](https://x.com/moneygalaxy)
+- Substack: [mindcodeplus](https://mindcodeplus.substack.com)
