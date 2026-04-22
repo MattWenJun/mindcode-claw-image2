@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.openclaw.codex-imagegen-service</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/env</string>
+    <string>node</string>
+    <string>__REPO_ROOT__/scripts/codex-imagegen-service.js</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>CODEX_IMAGEGEN_PORT</key>
+    <string>4312</string>
+    <key>CODEX_IMAGEGEN_ARTIFACT_ROOT</key>
+    <string>/tmp/codex-imagegen-service</string>
+    <key>CODEX_IMAGEGEN_JOB_TTL_MS</key>
+    <string>3600000</string>
+    <key>CODEX_IMAGEGEN_JOB_STATE_FILE</key>
+    <string>/tmp/codex-imagegen-service/jobs-state.json</string>
+    <key>CODEX_IMAGEGEN_WORKDIR</key>
+    <string>__REPO_ROOT__</string>
+  </dict>
+
+  <key>WorkingDirectory</key>
+  <string>__REPO_ROOT__</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/codex-imagegen-service.launchd.out.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/tmp/codex-imagegen-service.launchd.err.log</string>
+</dict>
+</plist>
