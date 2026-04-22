@@ -2,7 +2,17 @@
 
 [中文版](./README.zh-CN.md) | English
 
-A publishable draft of a **thin skill + local service** package for running Codex image generation through a stable local API.
+A publishable draft of a **thin skill + local service** package that lets your agent, whether OpenClaw, 爱马仕, or another claw-style agent, use your existing GPT subscription entitlement and quota to generate images through Image 2.
+
+## Purpose
+
+The point of this project is simple:
+
+- let your agent use **your own GPT subscription entitlement and quota**
+- route image generation through **Image 2**
+- make that capability directly callable from claw-style agents such as **OpenClaw**, **爱马仕**, and similar agent setups
+
+This package does not create a new image model account. It exposes a stable local path so your agent can use the image-generation capability you already have.
 
 ## What this package is
 
