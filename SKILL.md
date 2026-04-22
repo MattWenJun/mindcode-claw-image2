@@ -27,6 +27,8 @@ Trigger when the user clearly asks for things like:
 - "send this straight to codex imagegen"
 - "don't use other tools, use that image service"
 - "just use imagegen"
+- "Image2"
+- "use Image 2"
 - "use GPT Image 2"
 - "use MindCode Image"
 - "use mindcode-claw-image2"
