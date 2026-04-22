@@ -55,9 +55,11 @@ Do **not** force this skill for generic "generate an image" requests when the us
    - Do not automatically add style modifiers
    - Only rewrite the prompt when the user explicitly asks for prompt optimization
 
-3. **Warn first, then obey**
-   - For dense text infographics, timelines, or complex non-Latin typography, you may warn that the model may render text poorly
-   - A warning is not permission to switch paths. The user decides whether to continue
+3. **Trust Image 2 for text-heavy layouts**
+   - Do not be overly conservative about text density
+   - Image 2 is strong enough to handle many text-heavy images, timelines, and infographic-like layouts
+   - Do not default to warning the user just because the image contains a lot of text
+   - Only raise a quality warning when there is a concrete reason in the specific request
 
 4. **Deliver the image, not just metadata**
    - When generation succeeds, send the image
@@ -70,6 +72,7 @@ Do **not** force this skill for generic "generate an image" requests when the us
 - Do **not** imply this package works on its own without a local `codex` installation and valid upstream entitlement/quota
 - Do **not** rewrite the prompt unless the user asked for it
 - Do **not** replace the task with an HTML/layout workaround because you think it will look better
+- Do **not** act as if text-heavy prompts are inherently a bad fit for Image 2
 - Do **not** bloat the user-facing reply with service/runbook internals unless the user asked for technical details
 - On failure, state clearly which layer failed: submit, poll, generate, persist, or send
 
