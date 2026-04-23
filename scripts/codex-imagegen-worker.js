@@ -18,7 +18,7 @@ function createWorkerError(code, message, details = {}) {
 }
 
 function usage() {
-  console.error('Usage: node scripts/codex-imagegen-worker.js "<prompt>" [--output /tmp/out.png] [--timeout-sec 300] [--workdir /path] [--image /path/to/ref.png]');
+  console.error('Usage: node scripts/codex-imagegen-worker.js "<prompt>" [--output /tmp/out.png] [--timeout-sec 300] [--workdir /path] [--image /path/to/ref.png ...]');
   process.exit(1);
 }
 
@@ -199,11 +199,11 @@ async function generateImage(options) {
     });
   }
 
-  const images = Array.isArray(options.images) ? options.images : [];
-  for (const img of images) {
-    const resolved = path.resolve(img);
-    if (!fs.existsSync(resolved)) {
-      throw createWorkerError('image-not-found', `image file not found: ${img}`, { path: img });
+  const inputImages = Array.isArray(options.images) ? options.images : [];
+  const images = inputImages.map(img => path.resolve(img));
+  for (const imagePath of images) {
+    if (!fs.existsSync(imagePath)) {
+      throw createWorkerError('image-not-found', `image file not found: ${imagePath}`, { path: imagePath });
     }
   }
 

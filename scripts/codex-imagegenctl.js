@@ -10,6 +10,18 @@ const LABEL = 'com.openclaw.codex-imagegen-service';
 const TARGET_PLIST = path.join(os.homedir(), 'Library/LaunchAgents/com.openclaw.codex-imagegen-service.plist');
 const REPO_ROOT = path.resolve(__dirname, '..');
 
+function appendArgValue(args, key, value) {
+  if (!(key in args)) {
+    args[key] = value;
+    return;
+  }
+  if (Array.isArray(args[key])) {
+    args[key].push(value);
+    return;
+  }
+  args[key] = [args[key], value];
+}
+
 function parseArgs(argv) {
   const args = { _: [] };
   for (let i = 2; i < argv.length; i++) {
@@ -20,9 +32,9 @@ function parseArgs(argv) {
     }
     const key = arg.slice(2);
     const next = argv[i + 1];
-    if (!next || next.startsWith('--')) args[key] = true;
+    if (!next || next.startsWith('--')) appendArgValue(args, key, true);
     else {
-      args[key] = next;
+      appendArgValue(args, key, next);
       i += 1;
     }
   }
@@ -30,7 +42,7 @@ function parseArgs(argv) {
 }
 
 function usage() {
-  console.log(`Usage: node scripts/codex-imagegenctl.js <command> [options]\n\nCommands:\n  install                install/update launchd service\n  start                  launchctl bootstrap + kickstart\n  stop                   launchctl bootout\n  restart                restart service\n  status                 print launchctl status\n  health                 GET /health\n  submit --prompt TEXT   submit image generation job\n                         [--image /path] reference image(s) for image-to-image generation\n  job <job-id>           inspect job\n  smoke                  run smoke test\n  logs [--err] [--follow] show launchd logs\n`);
+  console.log(`Usage: node scripts/codex-imagegenctl.js <command> [options]\n\nCommands:\n  install                install/update launchd service\n  start                  launchctl bootstrap + kickstart\n  stop                   launchctl bootout\n  restart                restart service\n  status                 print launchctl status\n  health                 GET /health\n  submit --prompt TEXT   submit image generation job\n                         [--image /path ...] repeat --image for reference image(s)\n  job <job-id>           inspect job\n  smoke                  run smoke test\n  logs [--err] [--follow] show launchd logs\n`);
 }
 
 function run(cmd, args, opts = {}) {
