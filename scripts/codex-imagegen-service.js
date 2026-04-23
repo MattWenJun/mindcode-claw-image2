@@ -272,7 +272,7 @@ function enqueueJob(job) {
 
       const outputPath = path.join(ARTIFACT_ROOT, `${job.id}.png`);
       try {
-        const result = await generateImage({ prompt: job.prompt, outputPath, timeoutMs: job.timeoutMs });
+        const result = await generateImage({ prompt: job.prompt, outputPath, timeoutMs: job.timeoutMs, images: job.images || [] });
         finalizeJob(job, {
           status: 'completed',
           result: {
@@ -322,6 +322,10 @@ const server = http.createServer(async (req, res) => {
       const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : '';
       if (!prompt) throw createServiceError(400, 'prompt-required', 'prompt is required');
 
+      const images = Array.isArray(body.images)
+        ? body.images.filter(img => typeof img === 'string' && img.trim())
+        : [];
+
       const timeoutSec = body.timeout_sec == null ? 300 : Number(body.timeout_sec);
       if (!Number.isFinite(timeoutSec) || timeoutSec <= 0) {
         throw createServiceError(400, 'invalid-timeout-sec', 'timeout_sec must be a positive number', { timeoutSec: body.timeout_sec });
@@ -333,6 +337,7 @@ const server = http.createServer(async (req, res) => {
         id: crypto.randomUUID(),
         status: 'queued',
         prompt,
+        images,
         timeoutMs: timeoutSec * 1000,
         createdAt: new Date().toISOString(),
         startedAt: null,

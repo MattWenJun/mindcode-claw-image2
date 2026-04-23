@@ -30,7 +30,7 @@ function parseArgs(argv) {
 }
 
 function usage() {
-  console.log(`Usage: node scripts/codex-imagegenctl.js <command> [options]\n\nCommands:\n  install                install/update launchd service\n  start                  launchctl bootstrap + kickstart\n  stop                   launchctl bootout\n  restart                restart service\n  status                 print launchctl status\n  health                 GET /health\n  submit --prompt TEXT   submit image generation job\n  job <job-id>           inspect job\n  smoke                  run smoke test\n  logs [--err] [--follow] show launchd logs\n`);
+  console.log(`Usage: node scripts/codex-imagegenctl.js <command> [options]\n\nCommands:\n  install                install/update launchd service\n  start                  launchctl bootstrap + kickstart\n  stop                   launchctl bootout\n  restart                restart service\n  status                 print launchctl status\n  health                 GET /health\n  submit --prompt TEXT   submit image generation job\n                         [--image /path] reference image(s) for image-to-image generation\n  job <job-id>           inspect job\n  smoke                  run smoke test\n  logs [--err] [--follow] show launchd logs\n`);
 }
 
 function run(cmd, args, opts = {}) {
@@ -100,7 +100,9 @@ function main() {
       console.error('--prompt is required');
       process.exit(1);
     }
-    const payload = JSON.stringify({ prompt, timeout_sec: Number(args['timeout-sec'] || 180) });
+    const rawImages = args.image;
+    const images = rawImages ? (Array.isArray(rawImages) ? rawImages : [rawImages]) : [];
+    const payload = JSON.stringify({ prompt, images, timeout_sec: Number(args['timeout-sec'] || 180) });
     jsonFetch(`${BASE_URL}/v1/images/generations`, {
       method: 'POST',
       headers: ['content-type: application/json'],
