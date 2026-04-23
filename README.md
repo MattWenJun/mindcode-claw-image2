@@ -151,10 +151,12 @@ Supported environment variables:
 
 ## Notes on text-heavy images
 
-The service can submit any prompt, including infographic or timeline prompts. But if the model itself renders dense text poorly, the correct behavior for the skill is:
-- warn the user
-- keep the requested route
-- let the user decide whether to proceed
+The service can submit any prompt, including infographic, timeline, poster, and text-art prompts.
+
+For Image 2, the default behavior should be:
+- trust the requested Image 2 route
+- generate directly
+- do not add a conservative warning just because the request contains a lot of text
 
 It should **not** silently replace the request with an HTML or manual design workflow.
 
