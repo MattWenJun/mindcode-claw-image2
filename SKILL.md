@@ -41,6 +41,9 @@ Do **not** force this skill for generic "generate an image" requests when the us
 0. **Check prerequisites first**
    - Confirm the user's machine already has the `codex` CLI installed
    - Confirm the user has an active Codex or GPT subscription/path that actually allows image generation, plus enough quota or credits
+   - Confirm the local Codex image-generation capability is actually enabled before trusting this route
+   - If the environment exposes feature flags or capability checks, explicitly verify `image_generation` is available instead of assuming it
+   - If you hit `built-in image generation is unavailable`, treat that as an upstream Codex capability failure first, not as proof that the local service path is broken
    - Tell the user this dependency clearly before acting if it has not already been established
    - Do not pretend the service alone grants image generation capability
 
@@ -70,6 +73,7 @@ Do **not** force this skill for generic "generate an image" requests when the us
 
 - If the user explicitly names `codex-imagegen`, do **not** switch to another solution without permission
 - Do **not** imply this package works on its own without a local `codex` installation and valid upstream entitlement/quota
+- Do **not** assume `image_generation` is enabled just because the service is running; capability must be checked when there is doubt
 - Do **not** rewrite the prompt unless the user asked for it
 - Do **not** replace the task with an HTML/layout workaround because you think it will look better
 - Do **not** act as if text-heavy prompts are inherently a bad fit for Image 2
@@ -89,6 +93,7 @@ The service implementation details belong in scripts and docs, not in this skill
 
 When you report back, include:
 - whether prerequisites were checked,
+- whether Codex image-generation capability was explicitly verified when relevant,
 - whether the prompt was passed through raw,
 - whether the codex-imagegen service path was used,
 - whether the result succeeded or failed,
