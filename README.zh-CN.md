@@ -89,7 +89,10 @@ node scripts/codex-imagegenctl.js status
 node scripts/codex-imagegenctl.js health
 node scripts/codex-imagegenctl.js smoke
 node scripts/codex-imagegenctl.js submit --prompt "a red cube on white background"
+node scripts/codex-imagegenctl.js submit --prompt "a red cube on white background" --mode fast --wait
+node scripts/codex-imagegenctl.js submit --prompt "a red cube on white background" --mode fast --fast-timeout-sec 120 --wait
 node scripts/codex-imagegenctl.js job <job-id>
+node scripts/codex-imagegenctl.js resolve <job-id>
 node scripts/codex-imagegenctl.js logs --follow
 ```
 
@@ -104,8 +107,15 @@ node scripts/codex-imagegenctl.js logs --follow
 ### 行为
 
 - service 一次只串行执行一个排队 job
+- job 支持 `mode: fast|long`
+- `fast` 是较短观察窗口，不是同步捷径
+- `fast_timeout_sec` 允许调用方为测试或调试调整 fast 窗口
+- 如果 fast 窗口后已经出现产物迹象，同一个 job 可以原地升级成 `long`
+- 如果 fast job 在没有产物迹象时超时，service 可以把它标成 `promoted`，并通过 `replacementJobId` 继续后续 long job
+- `promoted` 不是失败状态
+- 关心最终结果的调用方，应 follow `replacementJobId`，或者直接用 `codex-imagegenctl resolve <job-id>`
 - 产物会写到 `<CODEX_IMAGEGEN_ARTIFACT_ROOT>/<job-id>.png`
-- 已完成和失败的 job 会在 `CODEX_IMAGEGEN_JOB_TTL_MS` 之后从内存状态中过期
+- 已完成、失败和 promoted 的 job 会在 `CODEX_IMAGEGEN_JOB_TTL_MS` 之后从内存状态中过期
 - 持久化状态写到 `CODEX_IMAGEGEN_JOB_STATE_FILE`
 - 如果 service 在 job 排队或运行过程中重启，这个 job 会被恢复成失败状态，错误码是 `service-restarted`
 
@@ -145,6 +155,9 @@ node scripts/codex-imagegen-smoke-test.js
 - `CODEX_IMAGEGEN_JOB_STATE_FILE`
 - `CODEX_IMAGEGEN_WORKDIR`
 - `CODEX_IMAGEGEN_BASE_URL`
+- `CODEX_IMAGEGEN_FAST_TIMEOUT_MS`
+- `CODEX_IMAGEGEN_LONG_TIMEOUT_MS`
+- `CODEX_IMAGEGEN_DETECT_INTERVAL_MS`
 - `CODEX_IMAGEGEN_SMOKE_PROMPT`
 - `CODEX_IMAGEGEN_SMOKE_TIMEOUT_SEC`
 - `CODEX_IMAGEGEN_SMOKE_MAX_WAIT_MS`

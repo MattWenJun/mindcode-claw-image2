@@ -88,7 +88,10 @@ node scripts/codex-imagegenctl.js status
 node scripts/codex-imagegenctl.js health
 node scripts/codex-imagegenctl.js smoke
 node scripts/codex-imagegenctl.js submit --prompt "a red cube on white background"
+node scripts/codex-imagegenctl.js submit --prompt "a red cube on white background" --mode fast --wait
+node scripts/codex-imagegenctl.js submit --prompt "a red cube on white background" --mode fast --fast-timeout-sec 120 --wait
 node scripts/codex-imagegenctl.js job <job-id>
+node scripts/codex-imagegenctl.js resolve <job-id>
 node scripts/codex-imagegenctl.js logs --follow
 ```
 
@@ -103,8 +106,15 @@ node scripts/codex-imagegenctl.js logs --follow
 ### Behavior
 
 - the service runs one queued job at a time
+- jobs support `mode: fast|long`
+- `fast` is a shorter observation window, not a synchronous shortcut
+- `fast_timeout_sec` lets callers tune the fast window for testing or debugging
+- if artifact evidence appears after the fast window, the same job can be promoted in place to `long`
+- if the fast job times out without artifact evidence, the service can mark it as `promoted` and continue through `replacementJobId`
+- `promoted` is not a failure state
+- callers that care about the final outcome should follow `replacementJobId` or use `codex-imagegenctl resolve <job-id>`
 - artifacts are written to `<CODEX_IMAGEGEN_ARTIFACT_ROOT>/<job-id>.png`
-- completed and failed jobs expire from in-memory state after `CODEX_IMAGEGEN_JOB_TTL_MS`
+- completed, failed, and promoted jobs expire from in-memory state after `CODEX_IMAGEGEN_JOB_TTL_MS`
 - persisted state is stored in `CODEX_IMAGEGEN_JOB_STATE_FILE`
 - if the service restarts while a job is queued or running, that job is recovered as failed with `service-restarted`
 
@@ -144,6 +154,9 @@ Supported environment variables:
 - `CODEX_IMAGEGEN_JOB_STATE_FILE`
 - `CODEX_IMAGEGEN_WORKDIR`
 - `CODEX_IMAGEGEN_BASE_URL`
+- `CODEX_IMAGEGEN_FAST_TIMEOUT_MS`
+- `CODEX_IMAGEGEN_LONG_TIMEOUT_MS`
+- `CODEX_IMAGEGEN_DETECT_INTERVAL_MS`
 - `CODEX_IMAGEGEN_SMOKE_PROMPT`
 - `CODEX_IMAGEGEN_SMOKE_TIMEOUT_SEC`
 - `CODEX_IMAGEGEN_SMOKE_MAX_WAIT_MS`

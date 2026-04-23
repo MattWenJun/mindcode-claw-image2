@@ -10,6 +10,8 @@ const PORT = Number(process.env.CODEX_IMAGEGEN_PORT || 4312);
 const ARTIFACT_ROOT = process.env.CODEX_IMAGEGEN_ARTIFACT_ROOT || '/tmp/codex-imagegen-service';
 const JOB_TTL_MS = Number(process.env.CODEX_IMAGEGEN_JOB_TTL_MS || 60 * 60 * 1000);
 const JOB_STATE_FILE = process.env.CODEX_IMAGEGEN_JOB_STATE_FILE || path.join(ARTIFACT_ROOT, 'jobs-state.json');
+const FAST_TIMEOUT_MS = Number(process.env.CODEX_IMAGEGEN_FAST_TIMEOUT_MS || 10 * 60 * 1000);
+const LONG_TIMEOUT_MS = Number(process.env.CODEX_IMAGEGEN_LONG_TIMEOUT_MS || 20 * 60 * 1000);
 
 const jobs = new Map();
 let queueTail = Promise.resolve();
@@ -100,13 +102,21 @@ function serializeJob(job) {
     id: job.id,
     status: job.status,
     prompt: job.prompt,
+    images: Array.isArray(job.images) ? job.images : [],
+    mode: job.mode,
+    requestedMode: job.requestedMode,
     timeoutMs: job.timeoutMs,
+    fastTimeoutMs: job.fastTimeoutMs || null,
     createdAt: job.createdAt,
     startedAt: job.startedAt || null,
     completedAt: job.completedAt || null,
     completedAtMs: job.completedAtMs || null,
     expiresAt: job.expiresAt || null,
     expiresAtMs: job.expiresAtMs || null,
+    promotedAt: job.promotedAt || null,
+    promotedFromJobId: job.promotedFromJobId || null,
+    replacementJobId: job.replacementJobId || null,
+    promotionReason: job.promotionReason || null,
     error: job.error || null,
     result: job.result || null,
   };
@@ -150,13 +160,21 @@ function loadPersistedJobs() {
       id: storedJob.id,
       status: storedJob.status || 'failed',
       prompt: storedJob.prompt || '',
-      timeoutMs: Number(storedJob.timeoutMs) || 300000,
+      images: Array.isArray(storedJob.images) ? storedJob.images : [],
+      mode: storedJob.mode || 'fast',
+      requestedMode: storedJob.requestedMode || storedJob.mode || 'fast',
+      timeoutMs: Number(storedJob.timeoutMs) || LONG_TIMEOUT_MS,
+      fastTimeoutMs: Number(storedJob.fastTimeoutMs) || null,
       createdAt: storedJob.createdAt || new Date(now).toISOString(),
       startedAt: storedJob.startedAt || null,
       completedAt: storedJob.completedAt || null,
       completedAtMs: Number(storedJob.completedAtMs) || null,
       expiresAt: storedJob.expiresAt || null,
       expiresAtMs: Number(storedJob.expiresAtMs) || null,
+      promotedAt: storedJob.promotedAt || null,
+      promotedFromJobId: storedJob.promotedFromJobId || null,
+      replacementJobId: storedJob.replacementJobId || null,
+      promotionReason: storedJob.promotionReason || null,
       error: storedJob.error || null,
       result: storedJob.result || null,
     };
@@ -188,6 +206,7 @@ function countJobs() {
     running: [...jobs.values()].filter(job => job.status === 'running').length,
     completed: [...jobs.values()].filter(job => job.status === 'completed').length,
     failed: [...jobs.values()].filter(job => job.status === 'failed').length,
+    promoted: [...jobs.values()].filter(job => job.status === 'promoted').length,
     total: jobs.size,
   };
 }
@@ -197,10 +216,18 @@ function publicJob(job) {
     id: job.id,
     status: job.status,
     prompt: job.prompt,
+    images: Array.isArray(job.images) ? job.images : [],
+    mode: job.mode,
+    requestedMode: job.requestedMode,
+    fastTimeoutMs: job.fastTimeoutMs || null,
     createdAt: job.createdAt,
     startedAt: job.startedAt || null,
     completedAt: job.completedAt || null,
     expiresAt: job.expiresAt || null,
+    promotedAt: job.promotedAt || null,
+    promotedFromJobId: job.promotedFromJobId || null,
+    replacementJobId: job.replacementJobId || null,
+    promotionReason: job.promotionReason || null,
     error: job.error || null,
     result: job.result || null,
   };
@@ -214,6 +241,41 @@ function finalizeJob(job, patch) {
   job.expiresAt = new Date(job.expiresAtMs).toISOString();
   job.error = patch.error || null;
   job.result = patch.result || null;
+}
+
+function createReplacementJob(job, reason) {
+  return {
+    id: crypto.randomUUID(),
+    status: 'queued',
+    prompt: job.prompt,
+    images: Array.isArray(job.images) ? [...job.images] : [],
+    mode: 'long',
+    requestedMode: job.requestedMode,
+    timeoutMs: LONG_TIMEOUT_MS,
+    fastTimeoutMs: null,
+    createdAt: new Date().toISOString(),
+    startedAt: null,
+    completedAt: null,
+    completedAtMs: null,
+    expiresAt: null,
+    expiresAtMs: null,
+    promotedAt: null,
+    promotedFromJobId: job.id,
+    replacementJobId: null,
+    promotionReason: reason,
+    result: null,
+    error: null,
+  };
+}
+
+function shouldPromoteToReplacement(job, error) {
+  if (job.requestedMode !== 'fast' || job.mode !== 'fast') return false;
+  if (!error) return false;
+  if (error.code === 'codex-exec-fast-timeout-no-artifact') return true;
+  if ((error.code === 'codex-exec-failed' || error.code === 'no-new-image-detected') && !error.details?.firstImageSeenPath) {
+    return true;
+  }
+  return false;
 }
 
 function getHealthReport() {
@@ -255,6 +317,8 @@ function getHealthReport() {
       jobStateFile: JOB_STATE_FILE,
       generatedImagesRoot: GENERATED_IMAGES_ROOT,
       workerWorkdir: DEFAULT_WORKDIR,
+      fastTimeoutMs: FAST_TIMEOUT_MS,
+      longTimeoutMs: LONG_TIMEOUT_MS,
     },
     checks,
   };
@@ -268,11 +332,35 @@ function enqueueJob(job) {
       job.status = 'running';
       job.startedAt = new Date().toISOString();
       persistJobs();
-      logEvent('info', 'job_started', { jobId: job.id, promptPreview: job.prompt.slice(0, 120), timeoutMs: job.timeoutMs });
+      logEvent('info', 'job_started', {
+        jobId: job.id,
+        promptPreview: job.prompt.slice(0, 120),
+        mode: job.mode,
+        requestedMode: job.requestedMode,
+        timeoutMs: job.timeoutMs,
+      });
 
       const outputPath = path.join(ARTIFACT_ROOT, `${job.id}.png`);
       try {
-        const result = await generateImage({ prompt: job.prompt, outputPath, timeoutMs: job.timeoutMs, images: job.images || [] });
+        const result = await generateImage({
+          prompt: job.prompt,
+          outputPath,
+          timeoutMs: job.timeoutMs,
+          images: job.images || [],
+          promoteTimeoutMs: job.mode === 'fast' ? (job.fastTimeoutMs || FAST_TIMEOUT_MS) : null,
+          onPromote: info => {
+            job.mode = 'long';
+            job.promotedAt = new Date(info.promotedAtMs).toISOString();
+            job.promotionReason = 'artifact-detected-after-fast-timeout';
+            persistJobs();
+            logEvent('info', 'job_promoted_in_place', {
+              jobId: job.id,
+              promotedAt: job.promotedAt,
+              firstImageSeenPath: info.firstImageSeenPath,
+              firstImageSeenElapsedMs: info.firstImageSeenElapsedMs,
+            });
+          },
+        });
         finalizeJob(job, {
           status: 'completed',
           result: {
@@ -280,11 +368,13 @@ function enqueueJob(job) {
             sourceImagePath: result.sourceImagePath,
             size: result.size,
             elapsedSec: result.elapsedSec,
+            timings: result.timings || null,
           },
         });
         persistJobs();
         logEvent('info', 'job_completed', {
           jobId: job.id,
+          mode: job.mode,
           outputPath: result.outputPath,
           sourceImagePath: result.sourceImagePath,
           size: result.size,
@@ -293,9 +383,29 @@ function enqueueJob(job) {
         });
       } catch (error) {
         const normalized = normalizeError(error, 500);
+        if (shouldPromoteToReplacement(job, normalized.error)) {
+          const replacement = createReplacementJob(job, normalized.error.code);
+          job.mode = 'long';
+          job.replacementJobId = replacement.id;
+          job.promotionReason = normalized.error.code;
+          finalizeJob(job, {
+            status: 'promoted',
+            result: { replacementJobId: replacement.id },
+          });
+          jobs.set(replacement.id, replacement);
+          persistJobs();
+          logEvent('warn', 'job_promoted_to_replacement', {
+            jobId: job.id,
+            replacementJobId: replacement.id,
+            reason: normalized.error.code,
+          });
+          enqueueJob(replacement);
+          return;
+        }
+
         finalizeJob(job, { status: 'failed', error: normalized.error });
         persistJobs();
-        logEvent('error', 'job_failed', { jobId: job.id, error: normalized.error, expiresAt: job.expiresAt });
+        logEvent('error', 'job_failed', { jobId: job.id, mode: job.mode, error: normalized.error, expiresAt: job.expiresAt });
       }
     });
 }
@@ -326,9 +436,19 @@ const server = http.createServer(async (req, res) => {
         ? body.images.filter(img => typeof img === 'string' && img.trim())
         : [];
 
-      const timeoutSec = body.timeout_sec == null ? 300 : Number(body.timeout_sec);
+      const requestedMode = body.mode == null ? 'fast' : String(body.mode).trim().toLowerCase();
+      if (!['fast', 'long'].includes(requestedMode)) {
+        throw createServiceError(400, 'invalid-mode', 'mode must be fast or long', { mode: body.mode });
+      }
+
+      const defaultTimeoutMs = requestedMode === 'long' ? LONG_TIMEOUT_MS : LONG_TIMEOUT_MS;
+      const timeoutSec = body.timeout_sec == null ? defaultTimeoutMs / 1000 : Number(body.timeout_sec);
+      const fastTimeoutSec = body.fast_timeout_sec == null ? null : Number(body.fast_timeout_sec);
       if (!Number.isFinite(timeoutSec) || timeoutSec <= 0) {
         throw createServiceError(400, 'invalid-timeout-sec', 'timeout_sec must be a positive number', { timeoutSec: body.timeout_sec });
+      }
+      if (fastTimeoutSec != null && (!Number.isFinite(fastTimeoutSec) || fastTimeoutSec <= 0)) {
+        throw createServiceError(400, 'invalid-fast-timeout-sec', 'fast_timeout_sec must be a positive number', { fastTimeoutSec: body.fast_timeout_sec });
       }
 
       ensureWritableDirectory(ARTIFACT_ROOT);
@@ -338,20 +458,33 @@ const server = http.createServer(async (req, res) => {
         status: 'queued',
         prompt,
         images,
+        mode: requestedMode,
+        requestedMode,
         timeoutMs: timeoutSec * 1000,
+        fastTimeoutMs: requestedMode === 'fast' ? (fastTimeoutSec == null ? FAST_TIMEOUT_MS : fastTimeoutSec * 1000) : null,
         createdAt: new Date().toISOString(),
         startedAt: null,
         completedAt: null,
         completedAtMs: null,
         expiresAt: null,
         expiresAtMs: null,
+        promotedAt: null,
+        promotedFromJobId: null,
+        replacementJobId: null,
+        promotionReason: null,
         result: null,
         error: null,
       };
 
       jobs.set(job.id, job);
       persistJobs();
-      logEvent('info', 'job_queued', { jobId: job.id, promptPreview: job.prompt.slice(0, 120), timeoutMs: job.timeoutMs });
+      logEvent('info', 'job_queued', {
+        jobId: job.id,
+        promptPreview: job.prompt.slice(0, 120),
+        mode: job.mode,
+        requestedMode: job.requestedMode,
+        timeoutMs: job.timeoutMs,
+      });
       enqueueJob(job);
 
       sendJson(res, 202, { ok: true, job: publicJob(job) });
@@ -378,5 +511,7 @@ server.listen(PORT, () => {
     artifactRoot: ARTIFACT_ROOT,
     jobTtlMs: JOB_TTL_MS,
     jobStateFile: JOB_STATE_FILE,
+    fastTimeoutMs: FAST_TIMEOUT_MS,
+    longTimeoutMs: LONG_TIMEOUT_MS,
   });
 });

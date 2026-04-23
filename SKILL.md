@@ -64,9 +64,14 @@ Do **not** force this skill for generic "generate an image" requests when the us
    - Do not default to warning the user just because the image contains a lot of text
    - Only raise a quality warning when there is a concrete reason in the specific request
 
-4. **Deliver the image, not just metadata**
+4. **Understand promoted jobs correctly**
+   - `promoted` is not a failure state
+   - A fast job may hand off to a replacement long job through `replacementJobId`
+   - If you need the final outcome, follow `replacementJobId` until you reach the current final job
+
+5. **Deliver the image, not just metadata**
    - When generation succeeds, send the image
-   - Do not stop at a job ID
+   - Do not stop at a job ID unless the user explicitly asked for async-only submission
    - Do not stop at a local file path
 
 ## Hard constraints
@@ -78,7 +83,7 @@ Do **not** force this skill for generic "generate an image" requests when the us
 - Do **not** replace the task with an HTML/layout workaround because you think it will look better
 - Do **not** act as if text-heavy prompts are inherently a bad fit for Image 2
 - Do **not** bloat the user-facing reply with service/runbook internals unless the user asked for technical details
-- On failure, state clearly which layer failed: submit, poll, generate, persist, or send
+- On failure, state clearly which layer failed: submit, poll, resolve-final-job, generate, persist, or send
 
 ## Outcome contract
 
@@ -97,6 +102,7 @@ When you report back, include:
 - whether the prompt was passed through raw,
 - whether the codex-imagegen service path was used,
 - whether the result succeeded or failed,
+- whether promoted/replacement-job semantics were involved,
 - and on failure, the layer plus the error code or message.
 
 ## What this skill is not

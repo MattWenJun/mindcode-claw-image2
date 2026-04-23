@@ -8,6 +8,7 @@ const { spawn } = require('child_process');
 const GENERATED_IMAGES_ROOT = path.join(os.homedir(), '.codex', 'generated_images');
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_WORKDIR = process.env.CODEX_IMAGEGEN_WORKDIR || path.resolve(__dirname, '..');
+const DETECT_INTERVAL_MS = Number(process.env.CODEX_IMAGEGEN_DETECT_INTERVAL_MS || 3000);
 
 function createWorkerError(code, message, details = {}) {
   const error = new Error(message);
@@ -132,8 +133,9 @@ function waitForStableSize(filePath, attempts = 3, delayMs = 500) {
   });
 }
 
-function runCodexExec({ workdir, prompt, timeoutMs, images }) {
+function runCodexExec({ workdir, prompt, timeoutMs, images, promoteTimeoutMs, beforeSnapshot, onPromote }) {
   return new Promise((resolve, reject) => {
+    const execStartedAtMs = Date.now();
     const args = [
       'exec',
       '--ephemeral',
@@ -162,27 +164,110 @@ function runCodexExec({ workdir, prompt, timeoutMs, images }) {
     let stdout = '';
     let stderr = '';
     let timedOut = false;
+    let timeoutCode = null;
+    let firstImageSeen = null;
+    let detectScanCount = 0;
+    let promotedToLong = false;
+    let promotedAtMs = null;
+    let hardTimer = null;
+    let softTimer = null;
 
-    const timer = setTimeout(() => {
+    const detectNewImage = () => {
+      if (!beforeSnapshot || firstImageSeen) return;
+      detectScanCount += 1;
+      const snapshot = snapshotPngFiles(GENERATED_IMAGES_ROOT);
+      const newFiles = diffNewFiles(beforeSnapshot, snapshot);
+      if (!newFiles.length) return;
+      const latest = newFiles[0];
+      firstImageSeen = {
+        path: latest.path,
+        size: latest.size,
+        mtimeMs: latest.mtimeMs,
+        seenAtMs: Date.now(),
+      };
+      firstImageSeen.elapsedMs = firstImageSeen.seenAtMs - execStartedAtMs;
+    };
+
+    const timeoutDetails = () => ({
+      timeoutMs,
+      promoteTimeoutMs,
+      promotedToLong,
+      promotedAtMs,
+      firstImageSeenPath: firstImageSeen?.path ?? null,
+      firstImageSeenElapsedMs: firstImageSeen?.elapsedMs ?? null,
+      detectScanCount,
+    });
+
+    hardTimer = setTimeout(() => {
       timedOut = true;
+      timeoutCode = promotedToLong ? 'codex-exec-timeout-after-promotion' : 'codex-exec-timeout';
       child.kill('SIGTERM');
     }, timeoutMs);
+
+    if (Number.isFinite(promoteTimeoutMs) && promoteTimeoutMs > 0 && promoteTimeoutMs < timeoutMs) {
+      softTimer = setTimeout(() => {
+        detectNewImage();
+        if (firstImageSeen) {
+          promotedToLong = true;
+          promotedAtMs = Date.now();
+          if (typeof onPromote === 'function') {
+            onPromote({
+              promotedAtMs,
+              firstImageSeenPath: firstImageSeen.path,
+              firstImageSeenElapsedMs: firstImageSeen.elapsedMs,
+              detectScanCount,
+            });
+          }
+          return;
+        }
+
+        timedOut = true;
+        timeoutCode = 'codex-exec-fast-timeout-no-artifact';
+        child.kill('SIGTERM');
+      }, promoteTimeoutMs);
+    }
+
+    const detectTimer = setInterval(detectNewImage, DETECT_INTERVAL_MS);
 
     child.stdout.on('data', chunk => { stdout += chunk.toString(); });
     child.stderr.on('data', chunk => { stderr += chunk.toString(); });
     child.on('error', error => {
-      clearTimeout(timer);
+      if (hardTimer) clearTimeout(hardTimer);
+      if (softTimer) clearTimeout(softTimer);
+      clearInterval(detectTimer);
       reject(createWorkerError('codex-exec-spawn-failed', 'failed to launch codex exec', {
         cause: error.message || String(error),
       }));
     });
     child.on('close', code => {
-      clearTimeout(timer);
+      const execClosedAtMs = Date.now();
+      if (hardTimer) clearTimeout(hardTimer);
+      if (softTimer) clearTimeout(softTimer);
+      clearInterval(detectTimer);
+      detectNewImage();
       if (timedOut) {
-        reject(createWorkerError('codex-exec-timeout', `codex exec timed out after ${timeoutMs}ms`, { timeoutMs }));
+        const message = timeoutCode === 'codex-exec-fast-timeout-no-artifact'
+          ? `codex exec reached fast timeout (${promoteTimeoutMs}ms) without artifact evidence`
+          : `codex exec timed out after ${timeoutMs}ms`;
+        reject(createWorkerError(timeoutCode, message, timeoutDetails()));
         return;
       }
-      resolve({ code, stdout, stderr });
+      resolve({
+        code,
+        stdout,
+        stderr,
+        timings: {
+          execStartedAtMs,
+          execClosedAtMs,
+          execElapsedMs: execClosedAtMs - execStartedAtMs,
+          detectIntervalMs: DETECT_INTERVAL_MS,
+          detectScanCount,
+          firstImageSeen,
+          promotedToLong,
+          promotedAtMs,
+          imageSeenBeforeExecCloseMs: firstImageSeen ? execClosedAtMs - firstImageSeen.seenAtMs : null,
+        },
+      });
     });
   });
 }
@@ -207,15 +292,22 @@ async function generateImage(options) {
     }
   }
 
-  const before = snapshotPngFiles(GENERATED_IMAGES_ROOT);
   const startedAt = Date.now();
+  const beforeSnapshotStartedAtMs = Date.now();
+  const before = snapshotPngFiles(GENERATED_IMAGES_ROOT);
+  const beforeSnapshotEndedAtMs = Date.now();
   const execution = await runCodexExec({
     workdir,
     prompt: buildImagegenPrompt(prompt),
     timeoutMs,
     images,
+    promoteTimeoutMs: options.promoteTimeoutMs,
+    beforeSnapshot: before,
+    onPromote: options.onPromote,
   });
+  const afterSnapshotStartedAtMs = Date.now();
   const after = snapshotPngFiles(GENERATED_IMAGES_ROOT);
+  const afterSnapshotEndedAtMs = Date.now();
   const newFiles = diffNewFiles(before, after);
 
   if (execution.code !== 0) {
@@ -223,6 +315,9 @@ async function generateImage(options) {
       exitCode: execution.code,
       stdoutPreview: execution.stdout.slice(-4000),
       stderrPreview: execution.stderr.slice(-4000),
+      firstImageSeenPath: execution.timings.firstImageSeen?.path ?? null,
+      firstImageSeenElapsedMs: execution.timings.firstImageSeen?.elapsedMs ?? null,
+      promotedToLong: execution.timings.promotedToLong || false,
     });
   }
 
@@ -230,18 +325,27 @@ async function generateImage(options) {
     throw createWorkerError('no-new-image-detected', 'no new image detected after codex exec completed', {
       stdoutPreview: execution.stdout.slice(-4000),
       stderrPreview: execution.stderr.slice(-4000),
+      firstImageSeenPath: execution.timings.firstImageSeen?.path ?? null,
+      firstImageSeenElapsedMs: execution.timings.firstImageSeen?.elapsedMs ?? null,
+      promotedToLong: execution.timings.promotedToLong || false,
     });
   }
 
   const latest = newFiles[0];
+  const stableWaitStartedAtMs = Date.now();
   const stableSize = await waitForStableSize(latest.path);
+  const stableWaitEndedAtMs = Date.now();
 
   let outputPath = latest.path;
+  let artifactCopyStartedAtMs = null;
+  let artifactCopyEndedAtMs = null;
   if (options.outputPath) {
     outputPath = path.resolve(options.outputPath);
     try {
       ensureParentDir(outputPath);
+      artifactCopyStartedAtMs = Date.now();
       fs.copyFileSync(latest.path, outputPath);
+      artifactCopyEndedAtMs = Date.now();
     } catch (error) {
       throw createWorkerError('artifact-copy-failed', `failed to copy generated image to ${outputPath}`, {
         outputPath,
@@ -250,16 +354,36 @@ async function generateImage(options) {
       });
     }
   }
+  const completedAtMs = Date.now();
+
+  const timings = {
+    totalElapsedMs: completedAtMs - startedAt,
+    beforeSnapshotMs: beforeSnapshotEndedAtMs - beforeSnapshotStartedAtMs,
+    codexExecMs: execution.timings.execElapsedMs,
+    firstImageSeenElapsedMs: execution.timings.firstImageSeen?.elapsedMs ?? null,
+    imageSeenBeforeExecCloseMs: execution.timings.imageSeenBeforeExecCloseMs,
+    afterSnapshotMs: afterSnapshotEndedAtMs - afterSnapshotStartedAtMs,
+    stableWaitMs: stableWaitEndedAtMs - stableWaitStartedAtMs,
+    artifactCopyMs: artifactCopyStartedAtMs == null ? 0 : artifactCopyEndedAtMs - artifactCopyStartedAtMs,
+    postExecToCompleteMs: completedAtMs - execution.timings.execClosedAtMs,
+    detectIntervalMs: execution.timings.detectIntervalMs,
+    detectScanCount: execution.timings.detectScanCount,
+    firstImageSeenPath: execution.timings.firstImageSeen?.path ?? null,
+    selectedImagePath: latest.path,
+    promotedToLong: execution.timings.promotedToLong || false,
+    promotedAtMs: execution.timings.promotedAtMs || null,
+  };
 
   return {
     ok: true,
     prompt,
     images,
     workdir,
-    elapsedSec: Math.round((Date.now() - startedAt) / 1000),
+    elapsedSec: Math.round((completedAtMs - startedAt) / 1000),
     sourceImagePath: latest.path,
     outputPath,
     size: stableSize,
+    timings,
     codexStdoutPreview: execution.stdout.slice(-1000),
   };
 }
