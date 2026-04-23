@@ -18,7 +18,7 @@ function createWorkerError(code, message, details = {}) {
 }
 
 function usage() {
-  console.error('Usage: node scripts/codex-imagegen-worker.js "<prompt>" [--output /tmp/out.png] [--timeout-sec 300] [--workdir /path]');
+  console.error('Usage: node scripts/codex-imagegen-worker.js "<prompt>" [--output /tmp/out.png] [--timeout-sec 300] [--workdir /path] [--image /path/to/ref.png]');
   process.exit(1);
 }
 
@@ -132,7 +132,7 @@ function waitForStableSize(filePath, attempts = 3, delayMs = 500) {
   });
 }
 
-function runCodexExec({ workdir, prompt, timeoutMs }) {
+function runCodexExec({ workdir, prompt, timeoutMs, images }) {
   return new Promise((resolve, reject) => {
     const args = [
       'exec',
@@ -142,8 +142,16 @@ function runCodexExec({ workdir, prompt, timeoutMs }) {
       'read-only',
       '--color',
       'never',
-      prompt,
     ];
+
+    if (Array.isArray(images) && images.length > 0) {
+      for (const imagePath of images) {
+        args.push('-i', imagePath);
+      }
+      args.push('--');
+    }
+
+    args.push(prompt);
 
     const child = spawn('codex', args, {
       cwd: workdir,
@@ -191,12 +199,21 @@ async function generateImage(options) {
     });
   }
 
+  const images = Array.isArray(options.images) ? options.images : [];
+  for (const img of images) {
+    const resolved = path.resolve(img);
+    if (!fs.existsSync(resolved)) {
+      throw createWorkerError('image-not-found', `image file not found: ${img}`, { path: img });
+    }
+  }
+
   const before = snapshotPngFiles(GENERATED_IMAGES_ROOT);
   const startedAt = Date.now();
   const execution = await runCodexExec({
     workdir,
     prompt: buildImagegenPrompt(prompt),
     timeoutMs,
+    images,
   });
   const after = snapshotPngFiles(GENERATED_IMAGES_ROOT);
   const newFiles = diffNewFiles(before, after);
@@ -237,6 +254,7 @@ async function generateImage(options) {
   return {
     ok: true,
     prompt,
+    images,
     workdir,
     elapsedSec: Math.round((Date.now() - startedAt) / 1000),
     sourceImagePath: latest.path,
@@ -254,11 +272,15 @@ async function main() {
   const timeoutSec = Number(args['timeout-sec'] || DEFAULT_TIMEOUT_MS / 1000);
   if (!Number.isFinite(timeoutSec) || timeoutSec <= 0) usage();
 
+  const rawImages = args.image;
+  const images = rawImages ? (Array.isArray(rawImages) ? rawImages : [rawImages]) : [];
+
   const result = await generateImage({
     prompt,
     workdir: args.workdir,
     timeoutMs: timeoutSec * 1000,
     outputPath: args.output,
+    images,
   });
 
   console.log(JSON.stringify(result, null, 2));
