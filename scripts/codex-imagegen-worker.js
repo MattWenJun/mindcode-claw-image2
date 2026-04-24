@@ -23,35 +23,63 @@ function usage() {
   process.exit(1);
 }
 
+function appendArgValue(args, key, value) {
+  if (!(key in args)) {
+    args[key] = value;
+    return;
+  }
+  if (Array.isArray(args[key])) {
+    args[key].push(value);
+    return;
+  }
+  args[key] = [args[key], value];
+}
+
 function parseArgs(argv) {
   const args = { _: [] };
   for (let i = 2; i < argv.length; i++) {
     const arg = argv[i];
+    if (arg === '--') {
+      args._.push(...argv.slice(i + 1));
+      break;
+    }
     if (!arg.startsWith('--')) {
       args._.push(arg);
       continue;
     }
     const key = arg.slice(2);
     const next = argv[i + 1];
-    if (!next || next.startsWith('--')) args[key] = true;
+    if (!next || next.startsWith('--')) appendArgValue(args, key, true);
     else {
-      args[key] = next;
+      appendArgValue(args, key, next);
       i++;
     }
   }
   return args;
 }
 
-function buildImagegenPrompt(prompt) {
-  return [
+function buildImagegenPrompt(prompt, images = []) {
+  const lines = [
     'Use imagegen to create an image with this request:',
     prompt,
+  ];
+
+  if (images.length) {
+    lines.push(
+      '',
+      'Reference image(s) are attached to this prompt. Use them as visual identity/style references when the request asks for reference images.'
+    );
+  }
+
+  lines.push(
     '',
     'Requirements:',
     '- Generate the image directly',
     '- Do not provide explanation',
     '- Return only the image result',
-  ].join('\n');
+  );
+
+  return lines.join('\n');
 }
 
 function snapshotPngFiles(rootDir) {
@@ -148,18 +176,18 @@ function runCodexExec({ workdir, prompt, timeoutMs, images, promoteTimeoutMs, be
 
     if (Array.isArray(images) && images.length > 0) {
       for (const imagePath of images) {
-        args.push('-i', imagePath);
+        args.push('--image', imagePath);
       }
-      args.push('--');
     }
 
-    args.push(prompt);
+    args.push('-');
 
     const child = spawn('codex', args, {
       cwd: workdir,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['pipe', 'pipe', 'pipe'],
       env: process.env,
     });
+    child.stdin.end(prompt);
 
     let stdout = '';
     let stderr = '';
@@ -298,7 +326,7 @@ async function generateImage(options) {
   const beforeSnapshotEndedAtMs = Date.now();
   const execution = await runCodexExec({
     workdir,
-    prompt: buildImagegenPrompt(prompt),
+    prompt: buildImagegenPrompt(prompt, images),
     timeoutMs,
     images,
     promoteTimeoutMs: options.promoteTimeoutMs,
