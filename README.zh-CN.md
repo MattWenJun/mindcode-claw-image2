@@ -91,6 +91,7 @@ node scripts/codex-imagegenctl.js smoke
 node scripts/codex-imagegenctl.js submit --prompt "a red cube on white background"
 node scripts/codex-imagegenctl.js submit --prompt "a red cube on white background" --mode fast --wait
 node scripts/codex-imagegenctl.js submit --prompt "a red cube on white background" --mode fast --fast-timeout-sec 120 --wait
+node scripts/codex-imagegenctl.js submit --prompt "a red cube on white background" --callback-url http://127.0.0.1:9000/imagegen-callback
 node scripts/codex-imagegenctl.js job <job-id>
 node scripts/codex-imagegenctl.js resolve <job-id>
 node scripts/codex-imagegenctl.js logs --follow
@@ -118,6 +119,11 @@ node scripts/codex-imagegenctl.js logs --follow
 - 已完成、失败和 promoted 的 job 会在 `CODEX_IMAGEGEN_JOB_TTL_MS` 之后从内存状态中过期
 - 持久化状态写到 `CODEX_IMAGEGEN_JOB_STATE_FILE`
 - 如果 service 在 job 排队或运行过程中重启，这个 job 会被恢复成失败状态，错误码是 `service-restarted`
+- 提交时可以提供可选 HTTP `callback` 对象；默认只在 `completed` 时触发
+- callback 事件可包含 `completed`，也可以显式包含 `failed`
+- callback 投递状态会独立记录为 `notificationStatus`、`notificationAttempts`、`notificationError`、`notificationSentAt`、`notificationLastAttemptAt`
+- callback 投递失败不会改变生成 job 状态；生成完成仍然是 `completed`
+- replacement promotion 链只由最终 replacement job 触发 callback，不会让中间 `promoted` job 双发
 
 ## 不通过 launchd 直接本地运行
 
@@ -137,6 +143,14 @@ curl -sS http://127.0.0.1:4312/health
 curl -sS -X POST http://127.0.0.1:4312/v1/images/generations \
   -H 'content-type: application/json' \
   -d '{"prompt":"a minimal white image with a tiny black dot centered","timeout_sec":180}'
+```
+
+提交带完成回调的 job：
+
+```bash
+curl -sS -X POST http://127.0.0.1:4312/v1/images/generations \
+  -H 'content-type: application/json' \
+  -d '{"prompt":"a minimal white image with a tiny black dot centered","callback":{"url":"http://127.0.0.1:9000/imagegen-callback","events":["completed"]}}'
 ```
 
 Smoke test：

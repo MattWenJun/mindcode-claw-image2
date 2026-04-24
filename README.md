@@ -90,6 +90,7 @@ node scripts/codex-imagegenctl.js smoke
 node scripts/codex-imagegenctl.js submit --prompt "a red cube on white background"
 node scripts/codex-imagegenctl.js submit --prompt "a red cube on white background" --mode fast --wait
 node scripts/codex-imagegenctl.js submit --prompt "a red cube on white background" --mode fast --fast-timeout-sec 120 --wait
+node scripts/codex-imagegenctl.js submit --prompt "a red cube on white background" --callback-url http://127.0.0.1:9000/imagegen-callback
 node scripts/codex-imagegenctl.js job <job-id>
 node scripts/codex-imagegenctl.js resolve <job-id>
 node scripts/codex-imagegenctl.js logs --follow
@@ -117,6 +118,11 @@ node scripts/codex-imagegenctl.js logs --follow
 - completed, failed, and promoted jobs expire from in-memory state after `CODEX_IMAGEGEN_JOB_TTL_MS`
 - persisted state is stored in `CODEX_IMAGEGEN_JOB_STATE_FILE`
 - if the service restarts while a job is queued or running, that job is recovered as failed with `service-restarted`
+- callers may provide an optional HTTP `callback` object on submit; by default it fires only for `completed` jobs
+- callback events may include `completed` and, when explicitly requested, `failed`
+- callback delivery status is stored separately as `notificationStatus`, `notificationAttempts`, `notificationError`, `notificationSentAt`, and `notificationLastAttemptAt`
+- callback failure does not change the generation job status; a completed generation remains `completed` even if callback delivery fails
+- replacement promotion chains notify only from the terminal replacement job, not from the intermediate `promoted` job
 
 ## Run locally without launchd
 
@@ -136,6 +142,14 @@ Submit a job:
 curl -sS -X POST http://127.0.0.1:4312/v1/images/generations \
   -H 'content-type: application/json' \
   -d '{"prompt":"a minimal white image with a tiny black dot centered","timeout_sec":180}'
+```
+
+Submit with a completion callback:
+
+```bash
+curl -sS -X POST http://127.0.0.1:4312/v1/images/generations \
+  -H 'content-type: application/json' \
+  -d '{"prompt":"a minimal white image with a tiny black dot centered","callback":{"url":"http://127.0.0.1:9000/imagegen-callback","events":["completed"]}}'
 ```
 
 Smoke test:

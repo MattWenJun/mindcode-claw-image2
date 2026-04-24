@@ -46,7 +46,7 @@ function parseArgs(argv) {
 }
 
 function usage() {
-  console.log(`Usage: node scripts/codex-imagegenctl.js <command> [options]\n\nCommands:\n  install                install/update launchd service\n  start                  launchctl bootstrap + kickstart\n  stop                   launchctl bootout\n  restart                restart service\n  status                 print launchctl status\n  health                 GET /health\n  submit --prompt TEXT   submit image generation job\n                         [--image /path ...] repeat --image for reference image(s)\n                         [--mode fast|long] [--timeout-sec 1200] [--fast-timeout-sec 600]\n                         [--wait] [--poll-interval-ms 3000]\n  job <job-id>           inspect job\n  resolve <job-id>       follow promoted jobs to the current final job\n  smoke                  run smoke test\n  logs [--err] [--follow] show launchd logs\n`);
+  console.log(`Usage: node scripts/codex-imagegenctl.js <command> [options]\n\nCommands:\n  install                install/update launchd service\n  start                  launchctl bootstrap + kickstart\n  stop                   launchctl bootout\n  restart                restart service\n  status                 print launchctl status\n  health                 GET /health\n  submit --prompt TEXT   submit image generation job\n                         [--image /path ...] repeat --image for reference image(s)\n                         [--callback-url URL] [--callback-event completed|failed ...]\n                         [--callback-header 'Name: value' ...]\n                         [--mode fast|long] [--timeout-sec 1200] [--fast-timeout-sec 600]\n                         [--wait] [--poll-interval-ms 3000]\n  job <job-id>           inspect job\n  resolve <job-id>       follow promoted jobs to the current final job\n  smoke                  run smoke test\n  logs [--err] [--follow] show launchd logs\n`);
 }
 
 function run(cmd, args, opts = {}) {
@@ -195,6 +195,19 @@ async function main() {
     const timeoutSec = args['timeout-sec'] == null ? 1200 : Number(args['timeout-sec']);
     const fastTimeoutSec = args['fast-timeout-sec'] == null ? null : Number(args['fast-timeout-sec']);
     const pollIntervalMs = args['poll-interval-ms'] == null ? 3000 : Number(args['poll-interval-ms']);
+    const callbackHeaders = {};
+    const rawCallbackHeaders = args['callback-header'] ? (Array.isArray(args['callback-header']) ? args['callback-header'] : [args['callback-header']]) : [];
+    for (const item of rawCallbackHeaders) {
+      const index = String(item).indexOf(':');
+      if (index <= 0) throw new Error('callback-header must be in "Name: value" format');
+      callbackHeaders[String(item).slice(0, index).trim()] = String(item).slice(index + 1).trim();
+    }
+    const rawCallbackEvents = args['callback-event'] ? (Array.isArray(args['callback-event']) ? args['callback-event'] : [args['callback-event']]) : [];
+    const callback = args['callback-url'] ? {
+      url: String(args['callback-url']),
+      events: rawCallbackEvents.length ? rawCallbackEvents : ['completed'],
+      headers: callbackHeaders,
+    } : null;
     if (!Number.isFinite(timeoutSec) || timeoutSec <= 0) throw new Error('timeout-sec must be a positive number');
     if (fastTimeoutSec != null && (!Number.isFinite(fastTimeoutSec) || fastTimeoutSec <= 0)) {
       throw new Error('fast-timeout-sec must be a positive number');
@@ -207,6 +220,7 @@ async function main() {
       mode,
       timeout_sec: timeoutSec,
       fast_timeout_sec: fastTimeoutSec,
+      callback,
     });
 
     const job = submit.json?.job;

@@ -69,7 +69,13 @@ Do **not** force this skill for generic "generate an image" requests when the us
    - A fast job may hand off to a replacement long job through `replacementJobId`
    - If you need the final outcome, follow `replacementJobId` until you reach the current final job
 
-5. **Deliver the image, not just metadata**
+5. **Understand optional callbacks**
+   - The public service may call an HTTP callback on terminal job states
+   - Callback delivery is additive; polling and `resolve` remain valid
+   - Callback failure is delivery failure, not generation failure
+   - Do not treat an intermediate `promoted` job as a completed delivery event
+
+6. **Deliver the image, not just metadata**
    - When generation succeeds, send the image
    - Do not stop at a job ID unless the user explicitly asked for async-only submission
    - Do not stop at a local file path

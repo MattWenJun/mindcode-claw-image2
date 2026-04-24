@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 const http = require('http');
+const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -97,6 +98,88 @@ function ensureWritableDirectory(dirPath) {
   fs.accessSync(dirPath, fs.constants.W_OK);
 }
 
+function redactUrl(rawUrl) {
+  try {
+    const parsed = new URL(rawUrl);
+    if (parsed.username) parsed.username = 'REDACTED';
+    if (parsed.password) parsed.password = 'REDACTED';
+    return parsed.toString();
+  } catch {
+    return '<invalid-url>';
+  }
+}
+
+function redactHeaders(headers = {}) {
+  const redacted = {};
+  for (const [key, value] of Object.entries(headers)) {
+    const lower = key.toLowerCase();
+    if (lower === 'authorization' || lower === 'cookie' || lower.includes('token') || lower.includes('secret') || lower.includes('key')) {
+      redacted[key] = '<redacted>';
+    } else {
+      redacted[key] = value;
+    }
+  }
+  return redacted;
+}
+
+function publicCallback(callback) {
+  if (!callback) return null;
+  return {
+    url: redactUrl(callback.url),
+    events: callback.events,
+    headers: redactHeaders(callback.headers),
+    timeoutMs: callback.timeoutMs,
+  };
+}
+
+function normalizeCallback(callback) {
+  if (callback == null) return null;
+  if (typeof callback !== 'object' || Array.isArray(callback)) {
+    throw createServiceError(400, 'invalid-callback', 'callback must be an object');
+  }
+  if (typeof callback.url !== 'string' || !callback.url.trim()) {
+    throw createServiceError(400, 'invalid-callback-url', 'callback.url is required');
+  }
+
+  let parsed;
+  try {
+    parsed = new URL(callback.url);
+  } catch {
+    throw createServiceError(400, 'invalid-callback-url', 'callback.url must be a valid URL');
+  }
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    throw createServiceError(400, 'invalid-callback-url', 'callback.url must use http or https');
+  }
+
+  const rawEvents = Array.isArray(callback.events) && callback.events.length ? callback.events : ['completed'];
+  const events = [...new Set(rawEvents.map(event => String(event).trim().toLowerCase()).filter(Boolean))];
+  const allowedEvents = new Set(['completed', 'failed']);
+  const invalidEvent = events.find(event => !allowedEvents.has(event));
+  if (invalidEvent) {
+    throw createServiceError(400, 'invalid-callback-events', 'callback.events may only contain completed or failed', { event: invalidEvent });
+  }
+
+  const headers = {};
+  if (callback.headers != null) {
+    if (typeof callback.headers !== 'object' || Array.isArray(callback.headers)) {
+      throw createServiceError(400, 'invalid-callback-headers', 'callback.headers must be an object');
+    }
+    for (const [key, value] of Object.entries(callback.headers)) {
+      if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(key)) {
+        throw createServiceError(400, 'invalid-callback-headers', 'callback header names must be valid HTTP token strings', { header: key });
+      }
+      headers[key] = String(value);
+    }
+  }
+
+  const timeoutMs = callback.timeout_ms == null ? 5000 : Number(callback.timeout_ms);
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 60000) {
+    throw createServiceError(400, 'invalid-callback-timeout', 'callback.timeout_ms must be between 1 and 60000');
+  }
+
+  return { url: parsed.toString(), events, headers, timeoutMs };
+}
+
 function serializeJob(job) {
   return {
     id: job.id,
@@ -117,6 +200,12 @@ function serializeJob(job) {
     promotedFromJobId: job.promotedFromJobId || null,
     replacementJobId: job.replacementJobId || null,
     promotionReason: job.promotionReason || null,
+    callback: publicCallback(job.callback),
+    notificationStatus: job.notificationStatus || null,
+    notificationAttempts: job.notificationAttempts || 0,
+    notificationError: job.notificationError || null,
+    notificationSentAt: job.notificationSentAt || null,
+    notificationLastAttemptAt: job.notificationLastAttemptAt || null,
     error: job.error || null,
     result: job.result || null,
   };
@@ -175,6 +264,12 @@ function loadPersistedJobs() {
       promotedFromJobId: storedJob.promotedFromJobId || null,
       replacementJobId: storedJob.replacementJobId || null,
       promotionReason: storedJob.promotionReason || null,
+      callback: null,
+      notificationStatus: storedJob.notificationStatus || null,
+      notificationAttempts: Number(storedJob.notificationAttempts) || 0,
+      notificationError: storedJob.notificationError || null,
+      notificationSentAt: storedJob.notificationSentAt || null,
+      notificationLastAttemptAt: storedJob.notificationLastAttemptAt || null,
       error: storedJob.error || null,
       result: storedJob.result || null,
     };
@@ -228,6 +323,12 @@ function publicJob(job) {
     promotedFromJobId: job.promotedFromJobId || null,
     replacementJobId: job.replacementJobId || null,
     promotionReason: job.promotionReason || null,
+    callback: publicCallback(job.callback),
+    notificationStatus: job.notificationStatus || null,
+    notificationAttempts: job.notificationAttempts || 0,
+    notificationError: job.notificationError || null,
+    notificationSentAt: job.notificationSentAt || null,
+    notificationLastAttemptAt: job.notificationLastAttemptAt || null,
     error: job.error || null,
     result: job.result || null,
   };
@@ -263,6 +364,12 @@ function createReplacementJob(job, reason) {
     promotedFromJobId: job.id,
     replacementJobId: null,
     promotionReason: reason,
+    callback: job.callback || null,
+    notificationStatus: null,
+    notificationAttempts: 0,
+    notificationError: null,
+    notificationSentAt: null,
+    notificationLastAttemptAt: null,
     result: null,
     error: null,
   };
@@ -276,6 +383,80 @@ function shouldPromoteToReplacement(job, error) {
     return true;
   }
   return false;
+}
+
+function postCallback(callback, payload) {
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify(payload);
+    const url = new URL(callback.url);
+    const transport = url.protocol === 'https:' ? https : http;
+    const req = transport.request(url, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'content-length': Buffer.byteLength(body),
+        ...callback.headers,
+      },
+      timeout: callback.timeoutMs,
+    }, res => {
+      let responseBody = '';
+      res.on('data', chunk => {
+        responseBody += chunk.toString();
+        if (responseBody.length > 4096) responseBody = responseBody.slice(-4096);
+      });
+      res.on('end', () => {
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          resolve({ statusCode: res.statusCode });
+          return;
+        }
+        reject(new Error(`callback returned HTTP ${res.statusCode}: ${responseBody.slice(0, 400)}`));
+      });
+    });
+    req.on('timeout', () => {
+      req.destroy(new Error(`callback timed out after ${callback.timeoutMs}ms`));
+    });
+    req.on('error', reject);
+    req.end(body);
+  });
+}
+
+async function dispatchCallback(job) {
+  if (!job.callback) return;
+  if (!job.callback.events.includes(job.status)) return;
+
+  job.notificationStatus = 'pending';
+  job.notificationAttempts = (job.notificationAttempts || 0) + 1;
+  job.notificationLastAttemptAt = new Date().toISOString();
+  job.notificationError = null;
+  persistJobs();
+
+  const payload = {
+    event: job.status,
+    job: publicJob(job),
+  };
+  try {
+    const result = await postCallback(job.callback, payload);
+    job.notificationStatus = 'sent';
+    job.notificationSentAt = new Date().toISOString();
+    job.notificationError = null;
+    persistJobs();
+    logEvent('info', 'job_callback_sent', {
+      jobId: job.id,
+      status: job.status,
+      callbackUrl: redactUrl(job.callback.url),
+      statusCode: result.statusCode,
+    });
+  } catch (error) {
+    job.notificationStatus = 'failed';
+    job.notificationError = error.message || String(error);
+    persistJobs();
+    logEvent('warn', 'job_callback_failed', {
+      jobId: job.id,
+      status: job.status,
+      callbackUrl: redactUrl(job.callback.url),
+      error: job.notificationError,
+    });
+  }
 }
 
 function getHealthReport() {
@@ -381,6 +562,7 @@ function enqueueJob(job) {
           elapsedSec: result.elapsedSec,
           expiresAt: job.expiresAt,
         });
+        await dispatchCallback(job);
       } catch (error) {
         const normalized = normalizeError(error, 500);
         if (shouldPromoteToReplacement(job, normalized.error)) {
@@ -406,6 +588,7 @@ function enqueueJob(job) {
         finalizeJob(job, { status: 'failed', error: normalized.error });
         persistJobs();
         logEvent('error', 'job_failed', { jobId: job.id, mode: job.mode, error: normalized.error, expiresAt: job.expiresAt });
+        await dispatchCallback(job);
       }
     });
 }
@@ -435,6 +618,7 @@ const server = http.createServer(async (req, res) => {
       const images = Array.isArray(body.images)
         ? body.images.filter(img => typeof img === 'string' && img.trim())
         : [];
+      const callback = normalizeCallback(body.callback);
 
       const requestedMode = body.mode == null ? 'fast' : String(body.mode).trim().toLowerCase();
       if (!['fast', 'long'].includes(requestedMode)) {
@@ -472,6 +656,12 @@ const server = http.createServer(async (req, res) => {
         promotedFromJobId: null,
         replacementJobId: null,
         promotionReason: null,
+        callback,
+        notificationStatus: null,
+        notificationAttempts: 0,
+        notificationError: null,
+        notificationSentAt: null,
+        notificationLastAttemptAt: null,
         result: null,
         error: null,
       };
